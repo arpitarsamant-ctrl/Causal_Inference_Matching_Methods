@@ -1,0 +1,9 @@
+*.html
+*_files/
+.quarto/
+
+git rm --cached *.html
+git rm --cached -r *_files
+git commit -m "Remove rendered HTML outputs"
+git push
+
