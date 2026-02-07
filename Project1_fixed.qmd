@@ -1,0 +1,981 @@
+---
+title: "Team 1: Project 1 - RCT, Matching"
+authors: Team 1
+format: html
+editor: visual
+toc: true
+toc-depth: 5
+toc-location: left
+execute:
+  warning: false
+---
+
+## 1.The Premise
+
+**Team Domain:** Healthcare Policy & Medical Technology
+
+**Client:** **The Center for Medicare & Medicaid Services (CMS).**
+
+-   Why them? They pay for both the pacemakers and the long-term care for dementia/stroke. They care about systemic inefficiencies costing them money.
+
+**The Narrative: Unintended/Tangential Consequences in Medicine**
+
+-   Pacemakers are life saving for arrhythmia. However, they create a logistical barrier. Many hospitals (especially smaller or rural ones) refuse to perform MRIs on patients with pacemakers due to liability costs, insurance barriers and staffing requirements (technicians need to reprogram the device before/after the scan).
+
+-   This means that elderly pacemaker patients with early signs of neurological issues *(eg. mini-strokes, normal pressure hydrocephalus, abnormal cognitive decline associated with dementia)* may face **delayed diagnosis** compared to non-pacemaker patients.
+
+-   **Hypothesis:** This delay leads to faster, unmanaged cognitive decline over a 3-year period.
+
+## 2. Summary and Research Question
+
+**Research Question:** Does the presence of a pacemaker cause a lower **MoCA** **Score** (3 years post-diagnosis) due to restricted access to diagnostic imaging?
+
+**The Treatment (D)**: Having a Pacemaker implanted (D=1)
+
+**The Outcome (Y)**: Montreal Cognitive Assessment (MoCA): a 30-point test, higher score is better. \<26 indicates cognitive impairment
+
+**Treatment Effect:** This is the **Diagnostic Penalty.** It’s the change in the test score caused by having the pacemaker. Because the pacemaker makes it harder to get an MRI, doctors might miss small brain issues. We expect this effect to be negative (the pacemaker causes the score to drop compared to not having one)
+
+-   **Confounders (X):** These are the variables that affect both whether you get a pacemaker and what your cognitive score is. If we don't control for these, our results will be biased. The Three Main Confounders:
+
+-   **Age:** Older people are more likely to need a pacemaker (D), but they also naturally have lower MoCA scores (Y)
+
+-   **SES Index (Esri):** People with a higher socioeconomic status have better access to heart surgery (D) and also better access to nutrition and education, which keeps MoCA scores high (Y)
+
+## 2. The DAG
+
+```{r}
+library(dagitty)
+library(ggdag)
+library(ggplot2)
+library(dplyr)
+
+dag <- dagitty("dag {
+  D <- x1 -> Y
+  D <- x2 -> Y
+  D -> Y
+}")
+
+tidy_dag <- tidy_dagitty(dag) %>%
+  mutate(label = case_when(
+    name == "D"  ~ "Having a Pacemaker",
+    name == "Y"  ~ "MoCA Score",
+    name == "x1" ~ "Age",
+    name == "x2" ~ "SES Index",
+    TRUE ~ name
+  ))
+
+ggdag(tidy_dag) +
+  geom_dag_label(aes(label = label),size=2.5) +
+  theme_dag()
+
+```
+
+![](DAG.jpg)
+
+## 3. The Potential Outcomes
+
+We are trying to think of these Parallel Universe scores for every patient in our data. Even though we only see one reality, we imagine two:
+
+-   $Y_i(1)$: The MoCA score for patient $i$ **if they receive** the pacemaker.
+
+-   $Y_i(0)$: The MoCA score for patient $i$ **if they do not receive** the pacemaker.
+
+### 3.1 ITE
+
+If Bob has a pacemaker, the ITE is the score Bob actually got minus the score Bob would have gotten if he never had the surgery.
+
+$ITE =Y_i(1)$ - $Y_i(0)$
+
+### 3.2 ATT
+
+> For the group that got the pacemaker, how much did their scores drop compared to what their scores would have been if they didn't have the device?
+
+$$ATT=E[Yi​(1)−Yi​(0)∣Di​=1]$$
+
+-   $E[Y_i(1) \mid D_i = 1]$ The average score we actually see for pacemaker patients.
+
+-   $E[Y_i(0) \mid D_i = 1]$ The Counterfactual: What those same pacemaker patients would have scored if they never got the device. This is the invisible part we use Matching to find.
+
+### 3.3 Understanding Selection Bias
+
+If we just subtract the average of the No-Pacemaker group from the Pacemaker group, we get this:
+
+$$\underbrace{E[Y_i|D_i=1]-E[Y_i|D_i=0]}_{\text{Difference in Means}}=\underbrace{ATT}_{\text{True Effect}}+\underbrace{\{E[Y_i(0)|D_i=1]-E[Y_i(0)|D_i=0]\}}_{\text{Selection Bias}}$$
+
+-   The Selection Bias part is there because the people who got the pacemaker (the treated) would have had different scores anyway compared to the healthy people who didn't get one (the control), even if neither group had the device.
+
+## 4. Building the Dataset
+
+### 4.1 Patient Demographics & the 2 worlds problem
+
+To realistically model Selection Bias, we created a distinct age gap between our Treated (Pacemaker) and Control (No Pacemaker) groups.
+
+-   **Pacemaker Group:** A mean age of **76 (**$\pm 11$). This aligns with registry data showing the average age of first implantation is between 75 and 76 years old.
+
+-   **Control Group:** A mean age of **58 (**$\pm 20$), representing the general inpatient population.
+
+-   **Reasoning:** In observational data, people with pacemakers are naturally older. If we did not model this age gap, we would fail to capture the real world confounding variables that our Matching needs to solve.
+
+> **Source:** *Greenspon, A. J., et al. (2011). Trends in permanent pacemaker implantation in the United States. Journal of the American College of Cardiology.* [Link to Study](https://www.google.com/search?q=https://www.jacc.org/doi/full/10.1016/j.jacc.2011.03.009&authuser=1)
+
+### 4.2 Outcome Variable: MoCA Scores
+
+We used the **Montreal Cognitive Assessment (MoCA)** scale (0–30 points) as our outcome.
+
+-   **Baseline Score:** We set the baseline for a healthy 60-year-old at **27.5 points**, consistent with data for "Normal Cognitive Function."
+
+-   **Age Decay:** We programmed a natural decline of 0.1 points per year of aging to simulate normal cognitive aging, independent of the pacemaker.
+
+> **Source:** *Nasreddine, Z. S., et al. (2005). The Montreal Cognitive Assessment, MoCA: a brief screening tool for mild cognitive impairment. Journal of the American Geriatrics Society.* [Link to Paper](https://pubmed.ncbi.nlm.nih.gov/15817019/)
+
+### 4.3 Esri Socioeconomic Status Index (SEI) Scale: 0 to 100 (Continuous)
+
+We modeled our population using the **Esri 2023/2028 Updated Demographics** methodology. Unlike generic wealth variables, the SEI is a composite measure of income, educational attainment, and employment status—factors proven to be stronger predictors of health outcomes than income alone.
+
+-   **National Benchmark (Mean):** The US national average SEI score is **47.5**.
+
+-   Scores below **45** are classified as **Low SES** and are clinically correlated with higher rates of comorbidity and lower access to specialized medical devices (like MRIs or Pacemakers).
+
+-   Scores above **65** indicate High SES correlating with better insurance coverage and earlier intervention.
+
+> **Primary Source:** *Esri. (2023). Methodology Statement: 2023/2028 Esri Updated Demographics.* [Link to PDF Methodology](https://doc.arcgis.com/en/esri-demographics/latest/esri-demographics/updated-demographics.htm)
+>
+> **Secondary Source (Health Link):** *Battioui, C. (Esri Health). Calculating Health Disparity Indexes.* (Demonstrates SEI’s power in predicting disease mortality).
+>
+> Consistent with *JAMA Cardiology (2017)* findings on inequity, we modeled our Pacemaker Group to have a higher mean SEI while the Control Group drifts lower
+
+| Covariate | Value | Interpretation | Source/Derivation |
+|------------------|------------------|------------------|------------------|
+| Age | -0.1 | Loss of 1 point per decade of aging. | *Nasreddine et al.* (Standard Age Decay) |
+| SEI/SES | +0.05 | Gain of 2 points between Low/High SES. | Medical literature says High Education provides about a **2-point** bonus on the MoCA test compared to Low Education. So we did a linear approximiation by defining a Low Esri score as 30 and high as 70. (2/40 = 0.05) |
+| Treatment delta | -2.5 | Drop from Normal to Mild Cognitive Impairment | *Clinical Significance Threshold* (Change \> 2 pts) |
+
+### 4.4 Data Code
+
+```{r}
+library(tidyverse)
+library(knitr)   
+
+set.seed(2026)   #@team please do not change the seed!
+
+# --- PART 1: Generate Covariates (N=1000) ---
+n <- 1000
+
+data <- tibble(
+  id = 1:n,
+  
+  # AGE GENERATION:
+  # We generate a broad pool (Mean 65), but the Treatment Assignment (Part 2) 
+  # will filter this so Pacemaker group is ~76 and Control is ~58.
+  # Constraint: Minimum age 50.
+  age = rnorm(n, mean = 65, sd = 15) %>% pmax(50) %>% pmin(95)%>%round(),
+  
+  # SES GENERATION (Esri SEI Standard):
+  # Mean: 47.5 (National Average)
+  # SD: 15 (Derived from Esri High/Low cutoffs)
+  esri_sei = rnorm(n, mean = 47.5, sd = 15) %>% pmax(0) %>% pmin(100)
+)
+
+# --- PART 2: Assign Treatment (Selection Bias) ---
+# We use a Logistic Probability model to assign pacemakers.
+# - Age Coefficient (0.15): Strong positive. Older people get pacemakers.
+# - SEI Coefficient (0.04): Weak positive. Wealthier people get access.
+# - Intercept (-12): Calibrates the overall rate to be realistic (~30-40%).
+
+logit_prob <- -12 + (0.15 * data$age) + (0.04 * data$esri_sei)
+prob_treatment <- plogis(logit_prob)
+
+data$pacemaker <- rbinom(n, 1, prob_treatment)
+
+# --- PART 3: Generate Outcome (MoCA Score) ---
+# Parameters based on Nasreddine et al. (2005) & Clinical norms.
+
+# 1. Healthy Baseline: 27.5 (for a 60-year-old)
+# 2. Age Decay: -0.1 points per year
+# 3. SES Buffer: +0.05 points per SEI unit (Cognitive Reserve)
+# 4. TRUE TREATMENT EFFECT: -2.5 points (The Diagnostic Delay Penalty)
+
+true_treatment_effect <- -2.5 
+
+data <- data %>%
+  mutate(
+    # Exogenous Cognitive Health (What they would have without the device)
+    cog_baseline = 27.5 - 0.1 * (age - 60) + 0.05 * (esri_sei - 47.5),
+    
+    # Add Measurement Noise (SD = 2.2)
+    noise = rnorm(n, mean = 0, sd = 2.2),
+    
+    # Calculate Potential Outcomes
+    y_0 = cog_baseline + noise,                     # Outcome if Control
+    y_1 = cog_baseline + true_treatment_effect + noise, # Outcome if Treated
+    
+    # Observed Outcome (The one we actually see in the data)
+    moca_score = ifelse(pacemaker == 1, y_1, y_0),
+    
+    # Clinical Bounds: MoCA scale is strictly 0-30
+    moca_score = pmin(moca_score, 30) %>% pmax(0)
+  )
+
+# --- PART 4: Verification Table ---
+# This proves to the client that your data matches the clinical literature.
+# You should see:
+# - Pacemaker Age ~ 75-76
+# - Control Age ~ 57-59
+# - Pacemaker SEI > Control SEI (Access Gap)
+
+verification_table <- data %>% 
+  group_by(pacemaker) %>% 
+  summarise(
+    Count = n(),
+    Avg_Age = round(mean(age), 1),
+    Avg_Esri_SEI = round(mean(esri_sei), 1),
+    Avg_MoCA = round(mean(moca_score), 1)
+  )
+
+kable(verification_table, caption = "Table 1: Baseline Characteristics by Treatment Group")
+```
+
+```{r}
+head(data)
+```
+
+| **Note:** Think of `y_0` and `y_1` as the answer key. We generated them using 'God Mode' (seeing parallel universes) so we know the exact truth of what the pacemaker does. But when we run the actual Matching code, we have to pretend we can't see them. We only peek at them at the very end to prove our matching worked
+
+> **Note on LLM usage:** For building the dataset, we used the following prompts:\
+> We are testing if having a **Pacemaker (D)** causes a drop in **Cognitive Scores (Y)** because patients can't get MRIs easily.
+>
+> **Data Requirements:**
+>
+> Please write R script to generate 1000 synthetic patients with the following rules:
+>
+> 1.  **Variables & Distributions:**
+>
+>     -   pacemaker (Treatment): Binary 0/1.
+>
+>     -   `moca_score`(Outcome): Scale 0–30.
+>
+>     -   `age` (Confounder): Mean 75, SD 7.
+>
+>     -   `ses_index` (Confounder): Mean 50, SD 15
+>
+> 2.  **Selection bias**
+>
+>     -   You need to build in confounding so I can use Propensity Score Matching later.
+>
+>     -   **Wealth Bias:** High SES patients should be more likely to get a pacemaker AND naturally have **higher** moCA
+>
+>     -   **Health Bias:** Older/sicker patients should be more likely to get a pacemaker but naturally have **lower** MoCA
+>
+> 3.  **The Target Effect:** Hard code a **True Treatment Effect (ATT) of -2.5 points**.
+
+## 5. EDA
+
+### 5.1 Age Distribution between control and treated groups
+
+```{r}
+# Density Plot for Age - Checks for Common Support
+ggplot(data, aes(x = age, fill = factor(pacemaker))) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Age Distribution",
+       subtitle = "Pacemaker patients are significantly older, creating a confounder.",
+       x = "Age", 
+       fill = "Pacemaker (1=Yes)") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1")
+```
+
+There is considerable overlap between the groups, meaning the data is conducive for matching.
+
+### 5.2 Cognitive Decline between control and treated groups as a function of age
+
+```{r}
+# Scatter Plot
+ggplot(data, aes(x = age, y = moca_score, color = factor(pacemaker))) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE) + 
+  labs(title = "MoCA Score Decay by Age",
+       subtitle = "Notice the gap between the two lines (The Treatment Effect?)",
+       x = "Age", 
+       y = "MoCA Score",
+       color = "Pacemaker") +
+  theme_minimal()
+```
+
+This plot shows clear differences between treated and control groups in terms of their MoCA score. While both groups see cognitive decline with age, the two lines are offset suggesting that there might be a treatment in place.
+
+### 5.3 SES by Treatment Group
+
+```{r}
+ggplot(data, aes(x = factor(pacemaker), y = esri_sei, fill = factor(pacemaker))) +
+  geom_boxplot(alpha = 0.7) +
+  labs(title = "Socioeconomic Status by Treatment Group",
+       subtitle = "Pacemaker patients tend to have higher SES",
+       x = "Treatment Status (0=No Pacemaker, 1=Pacemaker)",
+       y = "Esri SES Index") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Pastel1") +
+  theme(legend.position = "none")
+```
+
+The Pacemaker group has a higher median Socioeconomic Status (SES) than the control group. Since we know higher SES correlates with better cognition due to better access to healthcare, this imbalance inflates the Pacemaker group's MoCA scores. If we don't control for this, the pacemaker might look more beneficial (or less harmful) than it actually is.
+
+### 5.4 Propensity score overlap
+
+```{r}
+# Estimate propensity scores just for visualization
+ps_model_viz <- glm(pacemaker ~ age + esri_sei, data = data, family = binomial)
+data$ps_viz <- predict(ps_model_viz, type = "response")
+
+ggplot(data, aes(x = ps_viz, fill = factor(pacemaker))) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Propensity Score Overlap",
+       x = "Probability of Receiving Pacemaker (Propensity Score)",
+       y = "Density",
+       fill = "Group") +
+  theme_minimal() +
+  scale_fill_manual(values = c("gray", "blue"), labels = c("Control", "Treated"))
+```
+
+We see that while the distributions differ (Treated units have higher probability scores), there is significant overlap in the middle. This confirms that Matching is a good strategy. There are enough control patients with similar characteristics to treated patients to form valid comparisons.
+
+## 6. Matching
+
+### 6.3 k-1 Exact Matching
+
+```{r}
+library("MatchIt")
+```
+
+```{r}
+matches.Exact.Age <- matchit(
+  pacemaker ~ age,
+  data = data,
+  method = "exact",
+  verbose = TRUE
+)
+```
+
+```{r}
+summary(matches.Exact.Age)
+```
+
+```{r}
+matches.Exact.Age<-match.data(matches.Exact.Age) 
+head(matches.Exact.Age)
+```
+
+```{r}
+AvgTreat<-matches.Exact.Age %>%
+  filter(pacemaker == 1)%>%
+  select(moca_score)
+
+AvgControl<-matches.Exact.Age %>%
+  filter(pacemaker == 0)%>%
+  select(moca_score)
+
+TE.Exact.Age.DiM<-mean(AvgTreat$moca_score)-mean(AvgControl$moca_score)
+TE.Exact.Age.DiM
+```
+
+**Technical Explanation:** We are calculating ATE, which is the average treatment effect for the general population, since our focus is to find effects of pacemaker implementation in general, and not specifically in either people with or without pacemakers.
+
+First,our k-1 exact matching has std. mean difference of 0, which means that the average age between treatment and control is zero, which is ideal (our groups are balanced).
+
+Since in reality, there is no duplicate of a person being given the counterfactual treatment, the ATE is calculated as:
+
+$$ \widehat{\text{ATE}} = \mathbb{E}[Y \mid D = 1] - \mathbb{E}[Y \mid D = 0] $$
+
+where Y = moca_score and D = pacemaker (1 or 0)
+
+It should be noted that this isn't exact ATE, but rather an estimate of ATE which is a sum of ATT and selection bias.
+
+**Non-Technical Explanation:** In k-1 exact matching, we take one unit of either treated or control groups, and we find all units from the opposite group that look the same. In our case, "looking the same", means that they have the same age. This ensures they are directly comparable After doing this, we can average the MoCA scores over all treated and all untreated units and calculate the difference, which in our case, is -3.17, which falls in line with the intuition that pacemaker implementation has a negative effect on a persons health.
+
+It should be noted that since we are matching over only one covariate, the matches, while being more in number, are not as accurate.
+
+### 
+
+### 6.2 Coarsened Exact Matching
+
+```{r}
+library("MatchIt")
+```
+
+```{r}
+matches.Exact.Sei.Age <- matchit(
+  pacemaker ~ esri_sei+age,
+  data = data,
+  method = "cem",
+  verbose = TRUE,
+  estimand = "ATE"
+)
+```
+
+```{r}
+summary(matches.Exact.Sei.Age)
+```
+
+```{r}
+matches.Exact.Sei.Age<-match.data(matches.Exact.Sei.Age) 
+```
+
+```{r}
+head(matches.Exact.Sei.Age)
+```
+
+library(dplyr)
+
+```{r}
+TE.CEM <- with(matches.Exact.Sei.Age,
+  weighted.mean(moca_score[pacemaker == 1], weights[pacemaker == 1]) -
+  weighted.mean(moca_score[pacemaker == 0], weights[pacemaker == 0])
+)
+TE.CEM
+```
+
+**Technical Explanation:** We are calculating ATE, which is the average treatment effect for the general population, since our focus is to find effects of pacemaker implementation in general, and not specifically in either people with or without pacemakers. In coarsened exact matching, the covariates (age and ESRI SEI) are divided into bins before matching. When not specified, the system automatically determines the bins based on the data.
+
+After binning, CEM performs matching on these bins. Coarsened exact matching assigns to each observation based on the size of their bin and the proportion of treated vs. control units in that bin. The standard mean differences are 0.024 and 0.0265 for age and ESRI SEI respectively. While this is not as good as what we got in k-1 exact matching, it is small enough to be acceptable.
+
+Since in reality, there is no duplicate of a person being given the counterfactual treatment, the ATE is calculated as:
+
+$$ \widehat{\text{ATE}} = \frac{\sum_{i: D_i=1} w_i Y_i}{\sum_{i: D_i=1} w_i}  - \frac{\sum_{i: D_i=0} w_i Y_i}{\sum_{i: D_i=0} w_i} $$
+
+where Y = moca_score, D = pacemaker (1 or 0), and wi​ are the CEM weights.
+
+These weights ensure that each bin contributes proportionally to the population ATE estimate, accounting for varying bin. It should be noted that this isn't exact ATE, but rather an estimate of ATE which reduces selection bias through the coarsening and weighting mechanism.
+
+**Non-Technical Explanation:** When matching over multiple covariates, finding exact matches can be difficult, and may lead to us discarding many samples. To get around this, instead of matching on exact covariate values, we can divide coavariate values into bins and match on those. After this, we calculate the weighted mean for treatment and control and take the difference to get an ATE estimate, which in our case is -2.357, which falls in line with the intuition that pacemaker implementation has a negative effect on a persons health.
+
+Coarsening may generate more matches (not in our case, likely due to using two covariates).
+
+### 6.3 Propensity Score Matching
+
+#### Create Matches
+
+```{r}
+matches.PS <- matchit(
+  pacemaker ~ age + esri_sei,
+  data     = data,
+  method   = "nearest",
+  distance = "logit",
+  ratio    = 1,
+  estimand = "ATT"
+)
+```
+
+#### Check Balance
+
+```{r}
+summary(matches.PS)
+```
+
+```{r}
+plot(matches.PS, type = "jitter")
+```
+
+```{r}
+matched.PS <- match.data(matches.PS)
+```
+
+#### Treatment Effect via DiM
+
+```{r}
+PS.treated <- matched.PS %>% filter(pacemaker == 1) %>% dplyr::select(moca_score)
+PS.control <- matched.PS %>% filter(pacemaker == 0) %>% dplyr::select(moca_score)
+
+TE.PS.DiM <- mean(PS.treated$moca_score) - mean(PS.control$moca_score)
+TE.PS.DiM
+```
+
+#### Treatment Effect via G-Computation (ATE)
+
+```{r}
+library(marginaleffects)
+model.PS.ATE <- lm(moca_score ~ pacemaker + age + esri_sei,
+                    data = matched.PS, weights = weights)
+
+TE.PS.ATE <- avg_comparisons(
+  model.PS.ATE,
+  variables = "pacemaker",
+  newdata   = subset(matched.PS, pacemaker == 1),
+  vcov      = ~subclass,
+  wts       = "weights"
+)
+TE.PS.ATE
+```
+
+#### Potential Outcomes (ATE)
+
+```{r}
+PotOutcomes.PS.ATE <- avg_predictions(
+  model.PS.ATE,
+  variables = "pacemaker",
+  newdata   = matched.PS
+)
+PotOutcomes.PS.ATE
+```
+
+### 6.4 IPTW Analysis
+
+```{r}
+# IPTW ANALYSIS: ATE ESTIMATION
+
+
+# PART 6.4: IPTW Analysis
+
+library(tidyverse)
+library(survey)
+library(broom)
+
+
+data_iptw <- data 
+
+# 1. Estimate Propensity Scores
+# 'pacemaker' is the Treatment (D), 'age' and 'esri_sei' are Confounders (X)
+ps_model <- glm(
+  pacemaker ~ age + esri_sei,
+  data = data_iptw,
+  family = binomial(link = "logit")
+)
+
+# 2. Generate and store Propensity Scores
+data_iptw$pscore <- predict(ps_model, type = "response")
+
+# 3. Construct IPTW Weights (ATE)
+
+data_iptw <- data_iptw %>%
+  mutate(
+    iptw = ifelse(
+      pacemaker == 1,
+      1 / pscore,
+      1 / (1 - pscore)
+    )
+  )
+
+# 4. Estimate Treatment Effect using Survey Design
+iptw_design <- svydesign(
+  ids = ~1,
+  data = data_iptw,
+  weights = ~iptw
+)
+
+iptw_model <- svyglm(
+  moca_score ~ pacemaker,
+  design = iptw_design
+)
+
+# 5. Extract ATE Estimate
+ate_estimate <- tidy(iptw_model) %>%
+  filter(term == "pacemaker") %>%
+  dplyr::select(estimate, std.error, statistic, p.value)
+
+kable(ate_estimate, caption = "IPTW Estimate of Average Treatment Effect (ATE)")
+#In this study, receiving a pacemaker is not randomized. Instead, the probability of treatment depends on observed characteristics such as age and socioeconomic status. Because these covariates also affect cognitive outcomes (MoCA score), a simple comparison of treated and untreated individuals would produce biased estimates of the treatment effect.
+
+#To address this problem, we use Inverse Probability of Treatment Weighting (IPTW), a causal inference method based on propensity scores.
+
+#IPTW is used to estimate the causal effect of pacemaker treatment on cognitive outcomes by reweighting the data to remove selection bias arising from non-random treatment assignment.
+```
+
+## 7. Randomized Control Trial
+
+Suppose we could randomly assign treatment (i.e. we decide who gets a pacemaker). We will consider four methods of treatment assignment: i) simple, ii) complete, iii) block, iv) cluster.
+
+Because we are now imagining a randomized experiment, we ignore the observational `pacemaker` variable created earlier and instead randomly assign treatment.
+
+### 7.0 Housekeeping
+
+```{r}
+library(randomizr)
+library(marginaleffects)
+```
+
+We also create helper labels for stratification (used later in block and cluster assignment).
+
+```{r}
+data <- data %>%
+  mutate(
+    old = ifelse(age >= median(age), 1, 0),
+    AgeLabel = ifelse(old == 1, "Old", "Young"),
+    high_sei = ifelse(esri_sei > mean(esri_sei), 1, 0),
+    SEILabel = ifelse(high_sei == 1, "High SES", "Low SES")
+  )
+```
+
+### 7.1 Simple Treatment Assignment
+
+A "simple" assignment flips a fair coin for each individual.
+
+#### Treatment Assignment
+
+```{r}
+set.seed(123)
+data.RCT <- data %>%
+  mutate(treat.simple = simple_ra(N = nrow(data))) %>%
+  mutate(TreatLabel = ifelse(treat.simple == 1, "Treated", "Untreated")) %>%
+  mutate(rct_outcome = ifelse(treat.simple == 1, y_1, y_0))
+head(data.RCT)
+```
+
+##### Proportions
+
+```{r}
+tbl <- table(data.RCT$TreatLabel)
+tbl
+prop.table(tbl)
+```
+
+#### Check Age Balance
+
+##### Mosaic Plot
+
+```{r}
+ContingencyTable <- table(data.RCT$age, data.RCT$treat.simple)
+mosaicplot(ContingencyTable,
+           color = TRUE,
+           xlab = "Age",
+           ylab = "Treatment Status",
+           main = "Simple Random Assignment, Age")
+```
+
+##### KS Test
+
+```{r}
+treated <- data.RCT %>% filter(treat.simple == 1)
+untreated <- data.RCT %>% filter(treat.simple == 0)
+ks.test(treated$age, untreated$age)
+```
+
+A large p-value (0.984), implies we fail to reject the null, implying the density of ages among the treated group is the same as those in the untreated group.
+
+##### QQ Plot
+
+```{r}
+qqplot(treated$age, untreated$age)
+```
+
+##### Equal Proportions (Old/Young)
+
+```{r}
+tbl <- table(data.RCT$TreatLabel, data.RCT$AgeLabel)
+tbl
+prop.table(tbl, margin = 1)
+prop.test(tbl)
+```
+
+#### Check SES Balance
+
+##### Mosaic Plot
+
+```{r}
+ContingencyTable <- table(data.RCT$SEILabel, data.RCT$treat.simple)
+mosaicplot(ContingencyTable,
+           color = TRUE,
+           xlab = "SES",
+           ylab = "Treatment Status",
+           main = "Simple Random Assignment, SES")
+```
+
+##### KS Test
+
+```{r}
+ks.test(treated$esri_sei, untreated$esri_sei)
+```
+
+#### Estimate TE
+
+##### Difference in Means
+
+```{r}
+simple.treated <- data.RCT %>% filter(treat.simple == 1)
+simple.control <- data.RCT %>% filter(treat.simple == 0)
+
+TE.DiM <- mean(simple.treated$rct_outcome) - mean(simple.control$rct_outcome)
+TE.DiM
+```
+
+##### T-Test
+
+```{r}
+t.test(simple.control$rct_outcome, simple.treated$rct_outcome)
+```
+
+Since the p-value (0.749) is well above 0.05, we fail to reject the null hypothesis, meaning there is no statistically\
+significant difference in MoCA scores between the randomly assigned treated and control groups.
+
+##### OLS Regression
+
+```{r}
+TE.OLS <- lm(rct_outcome ~ treat.simple, data = data.RCT)
+summary(TE.OLS)
+```
+
+##### ATE / ATT / ATC via Regression
+
+ATE via difference in means
+
+```{r}
+model <- lm(rct_outcome ~ treat.simple * (age + esri_sei), data = data.RCT)
+
+data.RCT$Pred.Treated <- predict(model,
+  newdata = data.frame(treat.simple = 1, dplyr::select(data.RCT, !treat.simple)))
+data.RCT$Pred.UnTreated <- predict(model,
+  newdata = data.frame(treat.simple = 0, dplyr::select(data.RCT, !treat.simple)))
+
+ATE <- mean(data.RCT$Pred.Treated) - mean(data.RCT$Pred.UnTreated)
+ATE
+```
+
+TE via avg_comparisons
+
+```{r}
+avg_comparisons(model, variables = "treat.simple")
+```
+
+ATT via difference in means
+
+```{r}
+ATT <- mean(data.RCT[data.RCT$treat.simple == 1, ]$Pred.Treated) -
+       mean(data.RCT[data.RCT$treat.simple == 1, ]$Pred.UnTreated)
+ATT
+```
+
+Recomuting via avg_comparisons
+
+```{r}
+avg_comparisons(model, variables = "treat.simple", subset(data.RCT, treat.simple == 1))
+```
+
+ATC via DiM
+
+```{r}
+ATC <- mean(data.RCT[data.RCT$treat.simple == 0, ]$Pred.Treated) -
+       mean(data.RCT[data.RCT$treat.simple == 0, ]$Pred.UnTreated)
+ATC
+```
+
+Recomuting via avg_comparisons
+
+```{r}
+avg_comparisons(model, variables = "treat.simple", subset(data.RCT, treat.simple == 0))
+```
+
+### 7.2 Complete Treatment Assignment
+
+With complete assignment we fix the number of treated/control units in advance.
+
+#### Decide \# of Treat/Control
+
+```{r}
+m_each <- c(nrow(data.RCT) / 2 - 50, nrow(data.RCT) / 2 + 50)
+```
+
+#### Complete Random Assignment
+
+```{r}
+data.RCT <- data.RCT %>%
+  mutate(treat.complete = complete_ra(N = nrow(data.RCT), m_each = m_each)) %>%
+  mutate(rct_outcome_complete = ifelse(treat.complete == 1, y_1, y_0))
+```
+
+```{r}
+tbl <- table(data.RCT$treat.complete)
+tbl
+prop.table(tbl)
+```
+
+#### Check Age Balance
+
+```{r}
+ContingencyTable <- table(data.RCT$age, data.RCT$treat.complete)
+mosaicplot(ContingencyTable,
+           color = TRUE,
+           xlab = "Age",
+           ylab = "Treatment Status",
+           main = "Complete Random Assignment, Age")
+```
+
+#### Compute TE
+
+```{r}
+complete.treated <- data.RCT %>% filter(treat.complete == 1)
+complete.control <- data.RCT %>% filter(treat.complete == 0)
+
+TE.complete <- mean(complete.treated$rct_outcome_complete) - mean(complete.control$rct_outcome_complete)
+TE.complete
+```
+
+```{r}
+t.test(complete.control$rct_outcome_complete, complete.treated$rct_outcome_complete)
+```
+
+The p-value (0.679) is well above 0.05, so we fail to reject the null hypothesis, meaning there is no statistically significant difference in MoCA scores between the complete randomly assigned treated and control groups.
+
+### 7.3 Block Treatment Assignment
+
+Subjects are sorted into blocks by pre-treatment covariates, then complete random assignment is conducted within each block.
+
+#### Blocking by Age
+
+```{r}
+data.RCT <- data.RCT %>%
+  mutate(treat.block = block_ra(blocks = data.RCT$age)) %>%
+  mutate(rct_outcome_block = ifelse(treat.block == 1, y_1, y_0))
+```
+
+```{r}
+table(data.RCT$treat.block) / nrow(data.RCT)
+```
+
+#### Check Age Balance
+
+```{r}
+ContingencyTable <- table(data.RCT$age, data.RCT$treat.block)
+mosaicplot(ContingencyTable,
+           color = TRUE,
+           xlab = "Age",
+           ylab = "Treatment Status",
+           main = "Block Random Assignment by Age, Age")
+```
+
+#### Check SES Balance
+
+```{r}
+ContingencyTable <- table(data.RCT$SEILabel, data.RCT$treat.block)
+mosaicplot(ContingencyTable,
+           color = TRUE,
+           xlab = "SES",
+           ylab = "Treatment Status",
+           main = "Block Random Assignment by Age, SES")
+```
+
+#### Compute TE
+
+```{r}
+block.treated <- data.RCT %>% filter(treat.block == 1)
+block.control <- data.RCT %>% filter(treat.block == 0)
+
+TE.block <- mean(block.treated$rct_outcome_block) - mean(block.control$rct_outcome_block)
+TE.block
+```
+
+```{r}
+t.test(block.control$rct_outcome_block, block.treated$rct_outcome_block)
+```
+
+The p-value (0.7609) is well above 0.05, so we fail to reject the null hypothesis, meaning there is no statistically significant difference in MoCA scores between the complete randomly assigned treated and control groups.
+
+### 7.4 Cluster Treatment Assignment
+
+Treatment is assigned at the cluster level. Here we form clusters from the cross of Age (Old/Young) and SES (High/Low).
+
+#### Form the Clusters
+
+```{r}
+data.RCT$clusters <- with(data.RCT, paste(AgeLabel, SEILabel, sep = "_"))
+```
+
+```{r}
+temp <- data.RCT %>% dplyr::select(AgeLabel, SEILabel, clusters)
+head(temp)
+```
+
+#### Cluster Assignment
+
+```{r}
+data.RCT <- data.RCT %>%
+  mutate(treat.cluster = cluster_ra(clusters = clusters)) %>%
+  mutate(rct_outcome_cluster = ifelse(treat.cluster == 1, y_1, y_0))
+```
+
+```{r}
+table(data.RCT$clusters, data.RCT$treat.cluster)
+```
+
+#### Compute TE
+
+```{r}
+cluster.treated <- data.RCT %>% filter(treat.cluster == 1)
+cluster.control <- data.RCT %>% filter(treat.cluster == 0)
+
+TE.cluster <- mean(cluster.treated$rct_outcome_cluster) - mean(cluster.control$rct_outcome_cluster)
+TE.cluster
+```
+
+```{r}
+t.test(cluster.control$rct_outcome_cluster, cluster.treated$rct_outcome_cluster)
+```
+
+The p-value (6.79e-05) is well below 0.05, so we reject the null hypothesis — there is a statistically significant difference in MoCA scores between the cluster-assigned treated and control groups.
+
+However, this doesn't mean the cluster RCT "found" the true treatment effect. The issue is that clustering by Age × SES\
+assigns entire groups together, so the treatment/control groups end up imbalanced on the very covariates (age, SES) that\
+drive MoCA scores. The estimated difference (\~0.76) is picking up confounding from those covariates, not a real treatment\
+effect. This is why cluster assignment is the least desirable RCT method when avoidable — it's the most vulnerable to\
+covariate imbalance.
+
+### 7.5 Summary of RCT Estimates
+
+```{r}
+rct_summary <- tibble(
+  Method = c("Simple", "Complete", "Block (Age)", "Cluster (Age x SES)", "True Effect"),
+  TE_Estimate = c(TE.DiM, TE.complete, TE.block, TE.cluster, true_treatment_effect)
+)
+kable(rct_summary, caption = "Treatment Effect Estimates Across RCT Methods", digits = 3)
+```
+
+## 8. Selection Bias & Method Comparison
+
+### 8.1 Naive Difference in Means
+
+```{r}
+TE.Naive <- mean(data$moca_score[data$pacemaker == 1]) - mean(data$moca_score[data$pacemaker == 0])
+TE.Naive
+```
+
+### 8.2 Selection Bias Across Methods
+
+$$\text{Selection Bias} = \text{Estimated TE} - \text{True TE}$$
+
+```{r}
+methods <- c("Naive DiM",
+             "Exact Match (Age)",
+             "CEM (Age + SES)",
+             "PS Matching (DiM)",
+             "PS Matching (G-Comp ATT)",
+             "IPTW (ATE)")
+
+estimates <- c(TE.Naive,
+               TE.Exact.Age.DiM,
+               TE.CEM,
+               TE.PS.DiM,
+               TE.PS.ATE$estimate,
+               ate_estimate$estimate)
+
+bias_table <- tibble(
+  Method   = methods,
+  Estimate = round(estimates, 3),
+  True_TE  = true_treatment_effect,
+  Bias     = round(estimates - true_treatment_effect, 3)
+)
+
+kable(bias_table, caption = "Selection Bias by Estimation Method")
+```
+
+### 8.3 Residual Plot: Estimated Effect vs True Effect
+
+```{r}
+ggplot(bias_table, aes(x = reorder(Method, Bias), y = Bias)) +
+  geom_col(fill = "steelblue", width = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(
+    title    = "Deviation of Estimated TE from True Effect (-2.5)",
+    subtitle = "Bars closer to zero indicate less selection bias",
+    x = NULL,
+    y = "Estimated TE - True TE (Bias)"
+  ) +
+  theme_minimal()
+```
